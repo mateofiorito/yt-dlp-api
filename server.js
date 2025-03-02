@@ -2,8 +2,7 @@ const express = require('express');
 const { exec } = require('child_process');
 const path = require('path');
 const cors = require('cors');
-
-// Define yt-dlp command path. Assumes 'yt-dlp' is in your PATH.
+const fs = require('fs');
 const ytDlpPath = 'yt-dlp';
 
 const app = express();
@@ -11,6 +10,12 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
+
+// Ensure downloads folder exists
+const downloadsDir = path.join(__dirname, 'downloads');
+if (!fs.existsSync(downloadsDir)) {
+  fs.mkdirSync(downloadsDir);
+}
 
 // Simple test endpoint
 app.get('/', (req, res) => {
@@ -24,21 +29,17 @@ app.get('/', (req, res) => {
  */
 app.post('/download', (req, res) => {
   const { url } = req.body;
-
   if (!url) {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Define a fixed output file path. This is where yt-dlp will save the video.
+  // Define a fixed output file path
   const outputFilePath = path.join(__dirname, 'downloads', 'output.mp4');
 
-  // Build the yt-dlp command using the fixed output file name.
-  // This command tells yt-dlp to download and merge the best video and audio.
+  // Build the yt-dlp command using a fixed output file name.
   const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" -o "${outputFilePath}" "${url}"`;
-
   console.log(`Executing command: ${command}`);
 
-  // Execute the command and wait for completion.
   exec(command, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error executing yt-dlp: ${error.message}`);
@@ -47,16 +48,21 @@ app.post('/download', (req, res) => {
 
     console.log(`yt-dlp output: ${stdout}`);
 
-    // After the download is complete, send the file back in the response.
-    // res.sendFile streams the file to the client.
-    res.sendFile(outputFilePath, (err) => {
-      if (err) {
-        console.error('Error sending file:', err);
-        res.status(500).json({ error: 'Error sending file.' });
-      } else {
-        console.log('File sent successfully.');
+    // Check if file exists and add a small delay before sending it
+    setTimeout(() => {
+      if (!fs.existsSync(outputFilePath)) {
+        console.error('File does not exist at path:', outputFilePath);
+        return res.status(500).json({ error: 'Downloaded file not found.' });
       }
-    });
+      res.sendFile(outputFilePath, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          return res.status(500).json({ error: 'Error sending file.' });
+        } else {
+          console.log('File sent successfully.');
+        }
+      });
+    }, 1000);
   });
 });
 

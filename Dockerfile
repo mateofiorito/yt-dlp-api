@@ -1,10 +1,10 @@
 # Use an official Node.js image as the base
 FROM node:18
 
-# Update package lists and install Python3, pip, and ffmpeg
-RUN apt-get update && apt-get install -y python3-pip ffmpeg
+# Update package lists and install Python3 and pip
+RUN apt-get update && apt-get install -y python3-pip
 
-# Install yt-dlp using pip3 with the flag to override system constraints
+# Install yt-dlp using pip3
 RUN pip3 install --break-system-packages yt-dlp
 
 # Set the working directory inside the container

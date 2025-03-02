@@ -31,7 +31,7 @@ app.post('/download', (req, res) => {
 
   // Build the yt-dlp command using a fixed output file name.
   // Note: Using --no-check-certificate or any other flags as needed.
-  const command = `yt-dlp --no-check-certificate -f best -o "${outputFilePath}" "${url}"`;
+  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" -o '${outputFilePath}' "${url}"`;
 
   console.log(`Executing command: ${command}`);
 

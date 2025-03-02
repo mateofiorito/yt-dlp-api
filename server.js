@@ -4,7 +4,7 @@ const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
 
-// Define yt-dlp command path. Assumes 'yt-dlp' is in your PATH.
+// Define yt-dlp command path (assumes yt-dlp is in your PATH)
 const ytDlpPath = 'yt-dlp';
 
 const app = express();
@@ -35,12 +35,15 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Define a fixed output file path
-  const outputFilePath = path.join(__dirname, 'downloads', 'output.mp4');
+  // Generate a unique output filename to avoid overwrites
+  const fileName = `output-${Date.now()}.mp4`;
+  const outputFilePath = path.join(downloadsDir, fileName);
 
-  // Build the yt-dlp command using a fixed output file name.
-  // Using single quotes around the output path.
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" -o '${outputFilePath}' "${url}"`;
+  // Build the yt-dlp command:
+  // - Use "--no-check-certificate" to bypass SSL certificate verification if needed.
+  // - Use a format string limiting quality to 1080p and 60 fps.
+  // - Use single quotes around the output path to avoid shell interpretation issues.
+  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" -o '${outputFilePath}' "${url}"`;
   console.log(`Executing command: ${command}`);
 
   exec(command, (error, stdout, stderr) => {
@@ -50,16 +53,13 @@ app.post('/download', (req, res) => {
     }
 
     console.log(`yt-dlp output: ${stdout}`);
+    console.log('Downloads folder contents after exec:', fs.readdirSync(downloadsDir));
 
-    // Log the contents of the downloads folder for debugging
-    const downloadsFolder = path.join(__dirname, 'downloads');
-    console.log('Downloads folder contents after exec:', fs.readdirSync(downloadsFolder));
-
-    // Increase delay to 5 seconds before sending the file
+    // Delay to ensure the file is completely written; adjust delay as needed
     setTimeout(() => {
       if (!fs.existsSync(outputFilePath)) {
         console.error('File does not exist at path:', outputFilePath);
-        console.log('Downloads folder contents:', fs.readdirSync(downloadsFolder));
+        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
         return res.status(500).json({ error: 'Downloaded file not found.' });
       }
       res.sendFile(outputFilePath, (err) => {
@@ -70,7 +70,7 @@ app.post('/download', (req, res) => {
           console.log('File sent successfully.');
         }
       });
-    }, 5000);
+    }, 5000); // 5-second delay
   });
 });
 

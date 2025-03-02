@@ -81,11 +81,11 @@ app.post('/download-both', (req, res) => {
   const mergedFilePath = path.join(downloadsDir, `${baseName}-merged.mp4`);
   const audioFilePath = path.join(downloadsDir, `${baseName}-audio.mp3`);
 
-  // Command to download merged video+audio (using ffmpeg merging).
-  const mergedCommand = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" --merge-output-format mp4 -o '${mergedFilePath}' "${url}"`;
+  // Command to download merged video+audio using ffmpeg merging.
+  const mergedCommand = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" --merge-output-format mp4 -o "${mergedFilePath}" "${url}"`;
   
   // Command to extract audio only (converted to MP3).
-  const audioCommand = `${ytDlpPath} --no-check-certificate -x --audio-format mp3 -o '${audioFilePath}' "${url}"`;
+  const audioCommand = `${ytDlpPath} --no-check-certificate -x --audio-format mp3 -o "${audioFilePath}" "${url}"`;
 
   console.log(`Executing merged command: ${mergedCommand}`);
   exec(mergedCommand, (errorMerged, stdoutMerged, stderrMerged) => {
@@ -103,30 +103,24 @@ app.post('/download-both', (req, res) => {
       }
       console.log(`Audio output: ${stdoutAudio}`);
 
-      // After both downloads complete, create a ZIP archive.
-      res.setHeader('Content-Disposition', `attachment; filename=${baseName}.zip`);
-      res.setHeader('Content-Type', 'application/zip');
-
-      const archive = archiver('zip', { zlib: { level: 9 }});
-      archive.on('error', (err) => {
-        console.error('Archive error:', err);
-        res.status(500).json({ error: err.message });
-      });
-
-      // Pipe the archive stream directly to the response.
-      archive.pipe(res);
-
-      // Append the merged video and audio files to the archive.
-      archive.file(mergedFilePath, { name: path.basename(mergedFilePath) });
-      archive.file(audioFilePath, { name: path.basename(audioFilePath) });
-
-      // Finalize the archive (this returns a promise).
-      archive.finalize()
-        .then(() => console.log('Archive finalized and sent.'))
-        .catch(err => {
-          console.error('Archive finalize error:', err);
-          res.status(500).json({ error: err.message });
-        });
+      // Delay to ensure both files are completely written.
+      setTimeout(() => {
+        if (!fs.existsSync(mergedFilePath) || !fs.existsSync(audioFilePath)) {
+          console.error('One or both downloaded files are missing.');
+          console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
+          return res.status(500).json({ error: 'Downloaded files not found.' });
+        }
+        
+        // Construct public URLs for both files.
+        // This assumes the request host is the same as your app's domain.
+        const host = req.get('host');
+        const protocol = req.protocol;
+        const mergedURL = `${protocol}://${host}/files/${path.basename(mergedFilePath)}`;
+        const audioURL = `${protocol}://${host}/files/${path.basename(audioFilePath)}`;
+        
+        // Return the URLs as JSON.
+        res.json({ merged: mergedURL, audio: audioURL });
+      }, 5000); // 5-second delay; adjust as needed.
     });
   });
 });
@@ -134,4 +128,3 @@ app.post('/download-both', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
-

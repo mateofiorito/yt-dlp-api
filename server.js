@@ -3,12 +3,13 @@ const { exec } = require('child_process');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
+const archiver = require('archiver'); // Used to create ZIP files
 
 // Define yt-dlp command path (assumes yt-dlp is in your PATH)
 const ytDlpPath = 'yt-dlp';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
@@ -38,7 +39,7 @@ app.post('/download', (req, res) => {
   // Define a fixed output file path for the merged video.
   const outputFilePath = path.join(downloadsDir, 'output.mp4');
 
-  // Use a simple format that downloads a pre-merged file.
+  // Build the yt-dlp command using the "best" format (pre-merged).
   const command = `yt-dlp --no-check-certificate -f best -o "${outputFilePath}" "${url}"`;
   console.log(`Executing command: ${command}`);
 
@@ -49,10 +50,11 @@ app.post('/download', (req, res) => {
     }
 
     console.log(`yt-dlp output: ${stdout}`);
+
     res.sendFile(outputFilePath, (err) => {
       if (err) {
         console.error('Error sending file:', err);
-        res.status(500).json({ error: 'Error sending file.' });
+        return res.status(500).json({ error: 'Error sending file.' });
       } else {
         console.log('File sent successfully.');
       }
@@ -63,10 +65,10 @@ app.post('/download', (req, res) => {
 /**
  * POST /download-both
  * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads:
- *   - The merged video (video+audio) in MP4 format (using ffmpeg merging)
- *   - The audio-only version (converted to MP3)
- * Returns both files in a single multipart/mixed HTTP response.
+ * Downloads both:
+ *   - The merged video (video+audio) in MP4 format (limited to 1080p60), and
+ *   - The audio-only version (converted to MP3).
+ * Both files are then packaged into a ZIP archive that is returned to the client.
  */
 app.post('/download-both', (req, res) => {
   const { url } = req.body;
@@ -74,13 +76,14 @@ app.post('/download-both', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Generate a unique base name using a timestamp.
+  // Generate a unique base filename using a timestamp.
   const baseName = `output-${Date.now()}`;
   const mergedFilePath = path.join(downloadsDir, `${baseName}-merged.mp4`);
   const audioFilePath = path.join(downloadsDir, `${baseName}-audio.mp3`);
 
-  // Command to download the merged video (video+audio) using merging.
+  // Command to download merged video+audio (using ffmpeg merging).
   const mergedCommand = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" --merge-output-format mp4 -o '${mergedFilePath}' "${url}"`;
+  
   // Command to extract audio only (converted to MP3).
   const audioCommand = `${ytDlpPath} --no-check-certificate -x --audio-format mp3 -o '${audioFilePath}' "${url}"`;
 
@@ -100,35 +103,30 @@ app.post('/download-both', (req, res) => {
       }
       console.log(`Audio output: ${stdoutAudio}`);
 
-      // Increase delay to ensure both files are written (adjust as needed)
-      setTimeout(() => {
-        if (!fs.existsSync(mergedFilePath) || !fs.existsSync(audioFilePath)) {
-          console.error('One or both files not found.');
-          console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
-          return res.status(500).json({ error: 'One or both downloaded files not found.' });
-        }
-        
-        // Read both files into buffers.
-        const mergedBuffer = fs.readFileSync(mergedFilePath);
-        const audioBuffer = fs.readFileSync(audioFilePath);
-        
-        // Build a multipart/mixed response.
-        const boundary = '---MYBOUNDARY';
-        res.setHeader('Content-Type', 'multipart/mixed; boundary=' + boundary);
-        
-        const parts = [];
-        // Part 1: Merged video file.
-        parts.push(Buffer.from(`--${boundary}\r\nContent-Type: video/mp4\r\nContent-Disposition: attachment; filename="merged.mp4"\r\n\r\n`));
-        parts.push(mergedBuffer);
-        // Part 2: Audio file.
-        parts.push(Buffer.from(`\r\n--${boundary}\r\nContent-Type: audio/mpeg\r\nContent-Disposition: attachment; filename="audio.mp3"\r\n\r\n`));
-        parts.push(audioBuffer);
-        // End boundary.
-        parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-        
-        const responseBuffer = Buffer.concat(parts);
-        res.end(responseBuffer);
-      }, 5000); // 5-second delay; adjust if necessary.
+      // After both downloads complete, create a ZIP archive.
+      res.setHeader('Content-Disposition', `attachment; filename=${baseName}.zip`);
+      res.setHeader('Content-Type', 'application/zip');
+
+      const archive = archiver('zip', { zlib: { level: 9 }});
+      archive.on('error', (err) => {
+        console.error('Archive error:', err);
+        res.status(500).json({ error: err.message });
+      });
+
+      // Pipe the archive stream directly to the response.
+      archive.pipe(res);
+
+      // Append the merged video and audio files to the archive.
+      archive.file(mergedFilePath, { name: path.basename(mergedFilePath) });
+      archive.file(audioFilePath, { name: path.basename(audioFilePath) });
+
+      // Finalize the archive (this returns a promise).
+      archive.finalize()
+        .then(() => console.log('Archive finalized and sent.'))
+        .catch(err => {
+          console.error('Archive finalize error:', err);
+          res.status(500).json({ error: err.message });
+        });
     });
   });
 });

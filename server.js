@@ -35,15 +35,17 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Generate a unique output filename to avoid overwrites
+  // Generate a unique output filename to avoid overwrites.
+  // This file will be used to store the merged video.
   const fileName = `output-${Date.now()}.mp4`;
   const outputFilePath = path.join(downloadsDir, fileName);
 
   // Build the yt-dlp command:
-  // - Use "--no-check-certificate" to bypass SSL certificate verification if needed.
-  // - Use a format string limiting quality to 1080p and 60 fps.
-  // - Use single quotes around the output path to avoid shell interpretation issues.
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" -o '${outputFilePath}' "${url}"`;
+  // --no-check-certificate: bypass SSL verification if necessary.
+  // -f "bestvideo[height<=1080][fps<=60]+bestaudio/best": select the best video up to 1080p60 plus best audio.
+  // --merge-output-format mp4: force merging into an MP4 file.
+  // -o '<outputFilePath>': set the output file path.
+  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[height<=1080][fps<=60]+bestaudio/best" --merge-output-format mp4 -o '${outputFilePath}' "${url}"`;
   console.log(`Executing command: ${command}`);
 
   exec(command, (error, stdout, stderr) => {
@@ -53,13 +55,14 @@ app.post('/download', (req, res) => {
     }
 
     console.log(`yt-dlp output: ${stdout}`);
-    console.log('Downloads folder contents after exec:', fs.readdirSync(downloadsDir));
+    const downloadsFolder = path.join(__dirname, 'downloads');
+    console.log('Downloads folder contents after exec:', fs.readdirSync(downloadsFolder));
 
-    // Delay to ensure the file is completely written; adjust delay as needed
+    // Delay to ensure the file is completely written; adjust delay as needed.
     setTimeout(() => {
       if (!fs.existsSync(outputFilePath)) {
         console.error('File does not exist at path:', outputFilePath);
-        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
+        console.log('Downloads folder contents:', fs.readdirSync(downloadsFolder));
         return res.status(500).json({ error: 'Downloaded file not found.' });
       }
       res.sendFile(outputFilePath, (err) => {

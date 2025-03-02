@@ -62,7 +62,7 @@ app.post('/download', (req, res) => {
           console.log('File sent successfully.');
         }
       });
-    }, 1000);
+    }, 10000);
   });
 });
 

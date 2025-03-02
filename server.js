@@ -2,8 +2,9 @@ const express = require('express');
 const { exec } = require('child_process');
 const path = require('path');
 const cors = require('cors');
-const ytDlpPath = 'yt-dlp';
 
+// Define yt-dlp command path. Assumes 'yt-dlp' is in your PATH.
+const ytDlpPath = 'yt-dlp';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,16 +29,16 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Define a fixed output file path
+  // Define a fixed output file path. This is where yt-dlp will save the video.
   const outputFilePath = path.join(__dirname, 'downloads', 'output.mp4');
 
-  // Build the yt-dlp command using a fixed output file name.
-  // Note: Using --no-check-certificate or any other flags as needed.
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" -o "${outputTemplate}" "${url}"`;
+  // Build the yt-dlp command using the fixed output file name.
+  // This command tells yt-dlp to download and merge the best video and audio.
+  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" -o "${outputFilePath}" "${url}"`;
 
   console.log(`Executing command: ${command}`);
 
-  // Execute the command and wait for completion
+  // Execute the command and wait for completion.
   exec(command, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error executing yt-dlp: ${error.message}`);
@@ -47,7 +48,7 @@ app.post('/download', (req, res) => {
     console.log(`yt-dlp output: ${stdout}`);
 
     // After the download is complete, send the file back in the response.
-    // Use res.sendFile to stream the file.
+    // res.sendFile streams the file to the client.
     res.sendFile(outputFilePath, (err) => {
       if (err) {
         console.error('Error sending file:', err);

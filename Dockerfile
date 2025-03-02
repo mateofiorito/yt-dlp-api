@@ -2,7 +2,7 @@
 FROM node:18
 
 # Update package lists and install Python3 and pip
-RUN apt-get update && apt-get install -y python3-pip
+RUN apt-get update && apt-get install -y python3-pip ffmpeg
 
 # Install yt-dlp using pip3
 RUN pip3 install --break-system-packages yt-dlp

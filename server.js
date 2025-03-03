@@ -35,10 +35,10 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Define a fixed output file path (using a unique filename)
-  const outputFilePath = path.join(__dirname, 'downloads', `output-${Date.now()}.mp4`);
+  // Define a fixed output file path (using a unique filename if desired)
+  const outputFilePath = path.join(downloadsDir, `output-${Date.now()}.mp4`);
 
-  // Build the yt-dlp command using -f best (pre-merged)
+  // Build the yt-dlp command to download the best video and audio streams, merge them, and output as mp4.
   const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outputFilePath}" "${url}"`;
   console.log(`Executing command: ${command}`);
 
@@ -49,14 +49,22 @@ app.post('/download', (req, res) => {
     }
 
     console.log(`yt-dlp output: ${stdout}`);
+    // Optionally log the directory contents for debugging
+    console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
 
-    // After the download is complete, send the file back in the response.
-    res.sendFile(outputFilePath, (err) => {
-      if (err) {
-        console.error('Error sending file:', err);
-        res.status(500).json({ error: 'Error sending file.' });
-      } else {
-        console.log('File sent successfully.');
+    // Send the file after a short delay (adjust if necessary)
+    setTimeout(() => {
+      if (!fs.existsSync(outputFilePath)) {
+        console.error('File does not exist at path:', outputFilePath);
+        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
+        return res.status(500).json({ error: 'Downloaded file not found.' });
+      }
+      res.sendFile(outputFilePath, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          return res.status(500).json({ error: 'Error sending file.' });
+        } else {
+          console.log('File sent successfully.');
       }
     });
   });

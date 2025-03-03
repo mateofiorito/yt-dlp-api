@@ -106,7 +106,7 @@ app.post('/download-audio', (req, res) => {
 });
 
 /**
- * POST /download-video-only
+  * POST /download-video-only
  * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
  * Downloads just the video (without audio) in high quality and returns the video file.
  */
@@ -117,6 +117,7 @@ app.post('/download-video-only', (req, res) => {
   }
 
   const outputFilePath = path.join(__dirname, 'downloads', `video-${Date.now()}.mp4`);
+  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt'); // same cookie file
 
   // Build the command to download just the video stream.
   const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
@@ -129,6 +130,7 @@ app.post('/download-video-only', (req, res) => {
     }
     console.log(`yt-dlp (video-only) output: ${stdout}`);
 
+    // Wait a short period to ensure the file is written
     setTimeout(() => {
       if (!fs.existsSync(outputFilePath)) {
         console.error('Video-only file not found at:', outputFilePath);

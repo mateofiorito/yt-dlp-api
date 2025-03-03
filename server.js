@@ -35,37 +35,30 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Generate a unique filename for the merged output
-  const outputFilePath = path.join(downloadsDir, `output-${Date.now()}.mp4`);
+  // Define a fixed output file path (using a unique filename)
+  const outputFilePath = path.join(__dirname, 'downloads', `output-${Date.now()}.mp4`);
 
-  // Build the command to download best video and audio streams and merge them into MP4.
-  // This should yield the best quality video+audio.
+  // Build the yt-dlp command using -f best (pre-merged)
   const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download command: ${command}`);
+  console.log(`Executing command: ${command}`);
 
   exec(command, (error, stdout, stderr) => {
     if (error) {
-      console.error(`Error executing yt-dlp (merged): ${error.message}`);
+      console.error(`Error executing yt-dlp: ${error.message}`);
       return res.status(500).json({ error: error.message });
     }
-    console.log(`yt-dlp (merged) output: ${stdout}`);
-    
-    // Wait a short period to ensure the file is written (adjust delay as needed)
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Merged file not found at:', outputFilePath);
-        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
-        return res.status(500).json({ error: 'Downloaded file not found.' });
+
+    console.log(`yt-dlp output: ${stdout}`);
+
+    // After the download is complete, send the file back in the response.
+    res.sendFile(outputFilePath, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        res.status(500).json({ error: 'Error sending file.' });
+      } else {
+        console.log('File sent successfully.');
       }
-      res.sendFile(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error sending merged file:', err);
-          return res.status(500).json({ error: 'Error sending merged file.' });
-        } else {
-          console.log('Merged file sent successfully.');
-        }
-      });
-    }, 5000);
+    });
   });
 });
 

@@ -4,156 +4,101 @@ const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
 
-// Define yt-dlp command path (assumes yt-dlp is in your PATH)
-const ytDlpPath = 'yt-dlp';
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
 
-// Ensure the downloads folder exists
+// Create a "downloads" folder if it doesn't exist
 const downloadsDir = path.join(__dirname, 'downloads');
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir);
 }
 
-// Simple test endpoint
 app.get('/', (req, res) => {
-  res.send('Server is running!');
+  res.send('Combine-Two API for YouTube URLs is running!');
 });
 
 /**
- * POST /download
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads the merged video (video + audio) in the best quality possible and returns the file.
+ * POST /combine-two
+ * Expects a JSON body:
+ * {
+ *   "mainUrl": "https://www.youtube.com/watch?v=MAIN_VIDEO_ID",
+ *   "backgroundUrl": "https://www.youtube.com/watch?v=BACKGROUND_VIDEO_ID",
+ *   "startSeconds": 32,
+ *   "endSeconds": 45
+ * }
+ *
+ * This endpoint:
+ * 1. Downloads a segment from the main URL (video+audio) using yt-dlp with a format string that forces video.
+ * 2. Downloads a segment from the background URL (video only).
+ * 3. Uses ffmpeg to scale both segments to 1920x540 and stack them vertically (main on top, background on bottom) so the output is 1920x1080.
+ * 4. Maps audio from the main segment.
+ * 5. Returns the combined video file.
  */
-app.post('/download', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
+app.post('/combine-two', (req, res) => {
+  const { mainUrl, backgroundUrl, startSeconds, endSeconds } = req.body;
+  if (!mainUrl || !backgroundUrl || startSeconds === undefined || endSeconds === undefined) {
+    return res.status(400).json({ error: 'Missing required fields: mainUrl, backgroundUrl, startSeconds, and endSeconds.' });
   }
 
-  // Define a fixed output file path (using a unique filename if desired)
-  const outputFilePath = path.join(downloadsDir, `output-${Date.now()}.mp4`);
+  const timestamp = Date.now();
+  const timeRange = `*${startSeconds}-${endSeconds}`;
+  // Use a revised format string for the main segment:
+  // Try to get the best video stream (with ext=mp4) and best audio (with ext=m4a) and merge them.
+  const mainSegmentPath = path.join(downloadsDir, `mainSegment-${timestamp}.mp4`);
+  const backgroundSegmentPath = path.join(downloadsDir, `backgroundSegment-${timestamp}.mp4`);
+  const outputFilePath = path.join(downloadsDir, `combined-${timestamp}.mp4`);
 
-  // Build the yt-dlp command to download the best video and audio streams, merge them, and output as mp4.
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing command: ${command}`);
-
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp: ${error.message}`);
-      return res.status(500).json({ error: error.message });
+  // Revised command for main segment with an explicit format string
+  const mainCmd = `yt-dlp --no-check-certificate -ss ${startSeconds} -to ${endSeconds} -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4" --merge-output-format mp4 -o "${mainSegmentPath}" "${mainUrl}"`;
+  console.log(`Downloading main segment: ${mainCmd}`);
+  exec(mainCmd, (errMain, stdoutMain, stderrMain) => {
+    if (errMain) {
+      console.error(`Error downloading main segment: ${errMain.message}`);
+      return res.status(500).json({ error: errMain.message });
     }
+    console.log(`Main segment downloaded: ${stdoutMain}`);
 
-    console.log(`yt-dlp output: ${stdout}`);
-    // Optionally log the directory contents for debugging
-    console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
-
-    // Send the file after a short delay (adjust if necessary)
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('File does not exist at path:', outputFilePath);
-        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
-        return res.status(500).json({ error: 'Downloaded file not found.' });
+    // Command for background segment remains the same
+    const bgCmd = `yt-dlp --no-check-certificate -ss ${startSeconds} -to ${endSeconds} -f bestvideo --merge-output-format mp4 -o "${backgroundSegmentPath}" "${backgroundUrl}"`;
+    console.log(`Downloading background segment: ${bgCmd}`);
+    exec(bgCmd, (errBg, stdoutBg, stderrBg) => {
+      if (errBg) {
+        console.error(`Error downloading background segment: ${errBg.message}`);
+        return res.status(500).json({ error: errBg.message });
       }
-      res.sendFile(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error sending file:', err);
-          return res.status(500).json({ error: 'Error sending file.' });
-        } else {
-          console.log('File sent successfully.');
+      console.log(`Background segment downloaded: ${stdoutBg}`);
+
+      // Combine segments with ffmpeg:
+      // Scale each video to 1920x540, then stack vertically.
+      // Map audio from the main segment.
+      const ffmpegCmd = `ffmpeg -y -i "${mainSegmentPath}" -i "${backgroundSegmentPath}" -filter_complex "[0:v]scale=1920:540[v0]; [1:v]scale=1920:540[v1]; [v0][v1]vstack=inputs=2[v]" -map "[v]" -map 0:a? -c:v libx264 -preset fast -crf 23 "${outputFilePath}"`;
+      console.log(`Combining segments: ${ffmpegCmd}`);
+      exec(ffmpegCmd, (errFfmpeg, stdoutFfmpeg, stderrFfmpeg) => {
+        // Clean up temporary files
+        fs.unlink(mainSegmentPath, () => {});
+        fs.unlink(backgroundSegmentPath, () => {});
+
+        if (errFfmpeg) {
+          console.error(`Error combining segments: ${errFfmpeg.message}`);
+          return res.status(500).json({ error: errFfmpeg.message });
         }
+        console.log(`Segments combined: ${stdoutFfmpeg}`);
+        res.sendFile(outputFilePath, (errSend) => {
+          if (errSend) {
+            console.error(`Error sending combined file: ${errSend.message}`);
+            return res.status(500).json({ error: errSend.message });
+          } else {
+            console.log('Combined video file sent successfully.');
+          }
+        });
       });
-    }, 5000);
-  });
-});
-
-/**
- * POST /download-audio
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads just the audio, converts it to MP3, and returns the MP3 file.
- */
-app.post('/download-audio', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
-  }
-
-  const outputFilePath = path.join(downloadsDir, `audio-${Date.now()}.mp3`);
-
-  // Build the command to extract audio and convert to MP3
-  const command = `${ytDlpPath} --no-check-certificate -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download-audio command: ${command}`);
-
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp (audio): ${error.message}`);
-      return res.status(500).json({ error: error.message });
-    }
-    console.log(`yt-dlp (audio) output: ${stdout}`);
-
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Audio file not found at:', outputFilePath);
-        return res.status(500).json({ error: 'Downloaded audio file not found.' });
-      }
-      res.sendFile(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error sending audio file:', err);
-          return res.status(500).json({ error: 'Error sending audio file.' });
-        } else {
-          console.log('Audio file sent successfully.');
-        }
-      });
-    }, 5000);
-  });
-});
-
-/**
- * POST /download-video-only
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads just the video (without audio) in high quality and returns the video file.
- */
-app.post('/download-video-only', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
-  }
-
-  const outputFilePath = path.join(downloadsDir, `video-${Date.now()}.mp4`);
-
-  // Build the command to download only the video stream.
-  // Use "-f bestvideo" with a filter for MP4 (if available).
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download-video-only command: ${command}`);
-
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp (video-only): ${error.message}`);
-      return res.status(500).json({ error: error.message });
-    }
-    console.log(`yt-dlp (video-only) output: ${stdout}`);
-
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Video-only file not found at:', outputFilePath);
-        return res.status(500).json({ error: 'Downloaded video-only file not found.' });
-      }
-      res.sendFile(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error sending video-only file:', err);
-          return res.status(500).json({ error: 'Error sending video-only file.' });
-        } else {
-          console.log('Video-only file sent successfully.');
-        }
-      });
-    }, 5000);
+    });
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });

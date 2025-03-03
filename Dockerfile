@@ -13,10 +13,10 @@ WORKDIR /app
 # Copy package.json and package-lock.json (if available)
 COPY package*.json ./
 
-# Install Node.js dependencies (make sure to add "archiver" if you were using it; now not needed)
+# Install Node.js dependencies
 RUN npm install
 
-# Copy the rest of your application code
+# Copy the rest of your application code (including youtube-cookies.txt)
 COPY . .
 
 # Expose the port your app runs on

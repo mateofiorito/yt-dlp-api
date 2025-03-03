@@ -76,6 +76,7 @@ app.post('/download-audio', (req, res) => {
   }
 
   const outputFilePath = path.join(__dirname, 'downloads', `audio-${Date.now()}.mp3`);
+  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
 
   // Build the command for audio extraction.
   const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;

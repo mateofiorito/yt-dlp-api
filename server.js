@@ -78,7 +78,7 @@ app.post('/download-audio', (req, res) => {
   const outputFilePath = path.join(__dirname, 'downloads', `audio-${Date.now()}.mp3`);
 
   // Build the command for audio extraction.
-  const command = `${ytDlpPath} --no-check-certificate -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
+  const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
   console.log(`Executing /download-audio command: ${command}`);
 
   exec(command, (error, stdout, stderr) => {
@@ -119,7 +119,7 @@ app.post('/download-video-only', (req, res) => {
   const outputFilePath = path.join(__dirname, 'downloads', `video-${Date.now()}.mp4`);
 
   // Build the command to download just the video stream.
-  const command = `${ytDlpPath} --no-check-certificate -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
+  const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
   console.log(`Executing /download-video-only command: ${command}`);
 
   exec(command, (error, stdout, stderr) => {

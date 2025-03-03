@@ -65,8 +65,9 @@ app.post('/download', (req, res) => {
           return res.status(500).json({ error: 'Error sending file.' });
         } else {
           console.log('File sent successfully.');
-      }
-    });
+        }
+      });
+    }, 5000);
   });
 });
 

@@ -35,13 +35,11 @@ app.post('/download', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  // Define a unique output file path for the merged video
-  const outputFilePath = path.join(__dirname, 'downloads', `output-${Date.now()}.mp4`);
-  
-  // Define the cookies file path (which you added to your repository)
+  // Generate a unique output file path for merged video
+  const outputFilePath = path.join(downloadsDir, `output-${Date.now()}.mp4`);
   const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
-  
-  // Build the yt-dlp command using the cookie file.
+
+  // Build the command to download the best video and audio, merging them into an MP4 file.
   const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outputFilePath}" "${url}"`;
   console.log(`Executing /download command: ${command}`);
 
@@ -52,15 +50,24 @@ app.post('/download', (req, res) => {
     }
     console.log(`yt-dlp (merged) output: ${stdout}`);
 
-    // Send the merged file back in the response
-    res.sendFile(outputFilePath, (err) => {
-      if (err) {
-        console.error('Error sending merged file:', err);
-        return res.status(500).json({ error: 'Error sending merged file.' });
-      } else {
-        console.log('Merged file sent successfully.');
+    // Wait briefly to ensure the file is fully written
+    setTimeout(() => {
+      if (!fs.existsSync(outputFilePath)) {
+        console.error('Merged file not found at:', outputFilePath);
+        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
+        return res.status(500).json({ error: 'Downloaded file not found.' });
       }
-    });
+      // Use res.download() to stream the file and handle large file transfers gracefully.
+      res.download(outputFilePath, (err) => {
+        if (err) {
+          console.error('Error during file download:', err);
+          // Avoid setting headers after they are sent
+          // (res.download automatically sets appropriate headers)
+          return;
+        }
+        console.log('Merged file sent successfully.');
+      });
+    }, 5000);
   });
 });
 
@@ -75,10 +82,9 @@ app.post('/download-audio', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  const outputFilePath = path.join(__dirname, 'downloads', `audio-${Date.now()}.mp3`);
+  const outputFilePath = path.join(downloadsDir, `audio-${Date.now()}.mp3`);
   const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
 
-  // Build the command for audio extraction.
   const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
   console.log(`Executing /download-audio command: ${command}`);
 
@@ -94,10 +100,10 @@ app.post('/download-audio', (req, res) => {
         console.error('Audio file not found at:', outputFilePath);
         return res.status(500).json({ error: 'Downloaded audio file not found.' });
       }
-      res.sendFile(outputFilePath, (err) => {
+      res.download(outputFilePath, (err) => {
         if (err) {
-          console.error('Error sending audio file:', err);
-          return res.status(500).json({ error: 'Error sending audio file.' });
+          console.error('Error during audio file download:', err);
+          return;
         } else {
           console.log('Audio file sent successfully.');
         }
@@ -107,7 +113,7 @@ app.post('/download-audio', (req, res) => {
 });
 
 /**
-  * POST /download-video-only
+ * POST /download-video-only
  * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
  * Downloads just the video (without audio) in high quality and returns the video file.
  */
@@ -117,8 +123,8 @@ app.post('/download-video-only', (req, res) => {
     return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
 
-  const outputFilePath = path.join(__dirname, 'downloads', `video-${Date.now()}.mp4`);
-  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt'); // same cookie file
+  const outputFilePath = path.join(downloadsDir, `video-${Date.now()}.mp4`);
+  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
 
   // Build the command to download just the video stream.
   const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
@@ -131,16 +137,15 @@ app.post('/download-video-only', (req, res) => {
     }
     console.log(`yt-dlp (video-only) output: ${stdout}`);
 
-    // Wait a short period to ensure the file is written
     setTimeout(() => {
       if (!fs.existsSync(outputFilePath)) {
         console.error('Video-only file not found at:', outputFilePath);
         return res.status(500).json({ error: 'Downloaded video-only file not found.' });
       }
-      res.sendFile(outputFilePath, (err) => {
+      res.download(outputFilePath, (err) => {
         if (err) {
-          console.error('Error sending video-only file:', err);
-          return res.status(500).json({ error: 'Error sending video-only file.' });
+          console.error('Error during video-only file download:', err);
+          return;
         } else {
           console.log('Video-only file sent successfully.');
         }

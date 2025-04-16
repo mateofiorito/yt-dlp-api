@@ -13,22 +13,25 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
+// Ensure the downloads folder exists
 const downloadsDir = path.join(__dirname, 'downloads');
-if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir);
+if (!fs.existsSync(downloadsDir)) {
+  fs.mkdirSync(downloadsDir);
+}
 
-// Directory where your 45 cookie files live
-const cookiesDir = path.join(__dirname, 'youtube‑cookies');
+// Directory where your cookie files live
+const cookiesDir = path.join(__dirname, 'youtube-cookies');
 
 // Helper: get all cookie files
 function getCookieFiles() {
   return fs.readdirSync(cookiesDir)
-    .filter(f => f.match(/^youtube-cookies-\d+\.txt$/))
+    .filter(f => /^youtube-cookies-\d+\.txt$/.test(f))
     .map(f => path.join(cookiesDir, f));
 }
 
 // Helper: detect cookie-related errors
 function isCookieError(err, stderr = '') {
-  const msg = (err.message + stderr).toLowerCase();
+  const msg = (err.message + (stderr || '')).toLowerCase();
   return msg.includes('unable to load cookies')
       || msg.includes('cookie')
       || msg.includes('certificate')
@@ -41,50 +44,62 @@ function isCookieError(err, stderr = '') {
  * On cookie error, delete the bad cookie and retry with the next.
  */
 async function runWithRotatingCookies(commandBuilder) {
-  let cookies = getCookieFiles();  
-  for (const cookiePath of cookies) {
+  let cookieFiles = getCookieFiles();
+  for (const cookiePath of cookieFiles) {
     const cmd = commandBuilder(cookiePath);
     try {
       const { stdout, stderr } = await exec(cmd);
-      return { stdout, stderr };           // success!
+      return { stdout, stderr }; // success
     } catch (err) {
       if (isCookieError(err, err.stderr)) {
         // delete the bad cookie so we won't pick it again
-        fs.unlinkSync(cookiePath);
-        console.warn(`Deleted bad cookie file: ${cookiePath}`);
-        continue;                          // try next cookie
+        try {
+          fs.unlinkSync(cookiePath);
+          console.warn(`Deleted bad cookie file: ${cookiePath}`);
+        } catch (unlinkErr) {
+          console.error(`Failed to delete cookie file ${cookiePath}:`, unlinkErr);
+        }
+        continue; // try next cookie
       }
-      throw err;                           // non-cookie error → bail out
+      // non-cookie error → rethrow
+      throw err;
     }
   }
   throw new Error('No valid cookie files remaining');
 }
 
-//— generic handler creator —//
+// Factory to create download handlers
 function makeDownloadHandler(formatArgs, mergeArgs = '') {
   return async (req, res) => {
     const { url } = req.body;
-    if (!url) return res.status(400).json({ error: 'Missing "url".' });
+    if (!url) {
+      return res.status(400).json({ error: 'Missing "url" in request body.' });
+    }
 
     const outName = `${formatArgs.type}-${Date.now()}.${formatArgs.ext}`;
     const outputFilePath = path.join(downloadsDir, outName);
 
     try {
-      // build & run the command with rotating cookies
+      // Run yt-dlp with rotating cookies
       await runWithRotatingCookies(cookiePath => {
-        return `${ytDlpPath} --no-check-certificate ` +
-               `--cookies "${cookiePath}" ` +
-               `${formatArgs.ytDlpArgs} ${mergeArgs} ` +
-               `-o "${outputFilePath}" "${url}"`;
+        return [
+          ytDlpPath,
+          '--no-check-certificate',
+          `--cookies "${cookiePath}"`,
+          formatArgs.ytDlpArgs,
+          mergeArgs,
+          `-o "${outputFilePath}"`,
+          `"${url}"`
+        ].filter(Boolean).join(' ');
       });
 
-      // tiny delay to ensure file is flushed
+      // Give the filesystem a moment to flush
       setTimeout(() => {
         if (!fs.existsSync(outputFilePath)) {
           return res.status(500).json({ error: 'File not found after download.' });
         }
         res.download(outputFilePath, err => {
-          if (err) console.error('Download error:', err);
+          if (err) console.error('Error sending file:', err);
         });
       }, 2000);
 
@@ -95,7 +110,7 @@ function makeDownloadHandler(formatArgs, mergeArgs = '') {
   };
 }
 
-// Wire up your three endpoints
+// POST /download — merged video+audio
 app.post(
   '/download',
   makeDownloadHandler(
@@ -104,6 +119,7 @@ app.post(
   )
 );
 
+// POST /download-audio — audio-only MP3
 app.post(
   '/download-audio',
   makeDownloadHandler(
@@ -111,6 +127,7 @@ app.post(
   )
 );
 
+// POST /download-video-only — video-only MP4
 app.post(
   '/download-video-only',
   makeDownloadHandler(

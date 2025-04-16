@@ -1,158 +1,122 @@
 const express = require('express');
-const { exec } = require('child_process');
+const { promisify } = require('util');
+const { exec: execCb } = require('child_process');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
 
-// Define yt-dlp command path (assumes yt-dlp is in your PATH)
+const exec = promisify(execCb);
 const ytDlpPath = 'yt-dlp';
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
 
-// Ensure the downloads folder exists
 const downloadsDir = path.join(__dirname, 'downloads');
-if (!fs.existsSync(downloadsDir)) {
-  fs.mkdirSync(downloadsDir);
+if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir);
+
+// Directory where your 45 cookie files live
+const cookiesDir = path.join(__dirname, 'youtube‑cookies');
+
+// Helper: get all cookie files
+function getCookieFiles() {
+  return fs.readdirSync(cookiesDir)
+    .filter(f => f.match(/^youtube-cookies-\d+\.txt$/))
+    .map(f => path.join(cookiesDir, f));
 }
 
-// Simple test endpoint
-app.get('/', (req, res) => {
-  res.send('Server is running!');
-});
+// Helper: detect cookie-related errors
+function isCookieError(err, stderr = '') {
+  const msg = (err.message + stderr).toLowerCase();
+  return msg.includes('unable to load cookies')
+      || msg.includes('cookie')
+      || msg.includes('certificate')
+      || msg.includes('403')
+      || msg.includes('forbidden');
+}
 
 /**
- * POST /download
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads the merged video (video+audio) in the best quality possible and returns the video file.
+ * Try running a yt-dlp command with each cookie file in turn.
+ * On cookie error, delete the bad cookie and retry with the next.
  */
-app.post('/download', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
-  }
-
-  // Generate a unique output file path for merged video
-  const outputFilePath = path.join(downloadsDir, `output-${Date.now()}.mp4`);
-  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
-
-  // Build the command to download the best video and audio, merging them into an MP4 file.
-  const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo+bestaudio/best" --merge-output-format mp4 -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download command: ${command}`);
-
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp (merged): ${error.message}`);
-      return res.status(500).json({ error: error.message });
-    }
-    console.log(`yt-dlp (merged) output: ${stdout}`);
-
-    // Wait briefly to ensure the file is fully written
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Merged file not found at:', outputFilePath);
-        console.log('Downloads folder contents:', fs.readdirSync(downloadsDir));
-        return res.status(500).json({ error: 'Downloaded file not found.' });
+async function runWithRotatingCookies(commandBuilder) {
+  let cookies = getCookieFiles();  
+  for (const cookiePath of cookies) {
+    const cmd = commandBuilder(cookiePath);
+    try {
+      const { stdout, stderr } = await exec(cmd);
+      return { stdout, stderr };           // success!
+    } catch (err) {
+      if (isCookieError(err, err.stderr)) {
+        // delete the bad cookie so we won't pick it again
+        fs.unlinkSync(cookiePath);
+        console.warn(`Deleted bad cookie file: ${cookiePath}`);
+        continue;                          // try next cookie
       }
-      // Use res.download() to stream the file and handle large file transfers gracefully.
-      res.download(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error during file download:', err);
-          // Avoid setting headers after they are sent
-          // (res.download automatically sets appropriate headers)
-          return;
-        }
-        console.log('Merged file sent successfully.');
-      });
-    }, 5000);
-  });
-});
-
-/**
- * POST /download-audio
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads just the audio, converts it to MP3, and returns the MP3 file.
- */
-app.post('/download-audio', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
-  }
-
-  const outputFilePath = path.join(downloadsDir, `audio-${Date.now()}.mp3`);
-  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
-
-  const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -x --audio-format mp3 -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download-audio command: ${command}`);
-
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp (audio): ${error.message}`);
-      return res.status(500).json({ error: error.message });
+      throw err;                           // non-cookie error → bail out
     }
-    console.log(`yt-dlp (audio) output: ${stdout}`);
-
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Audio file not found at:', outputFilePath);
-        return res.status(500).json({ error: 'Downloaded audio file not found.' });
-      }
-      res.download(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error during audio file download:', err);
-          return;
-        } else {
-          console.log('Audio file sent successfully.');
-        }
-      });
-    }, 5000);
-  });
-});
-
-/**
- * POST /download-video-only
- * Expects a JSON body: { "url": "https://www.youtube.com/watch?v=VIDEO_ID" }
- * Downloads just the video (without audio) in high quality and returns the video file.
- */
-app.post('/download-video-only', (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing "url" in request body.' });
   }
+  throw new Error('No valid cookie files remaining');
+}
 
-  const outputFilePath = path.join(downloadsDir, `video-${Date.now()}.mp4`);
-  const cookiesPath = path.join(__dirname, 'youtube-cookies.txt');
+//— generic handler creator —//
+function makeDownloadHandler(formatArgs, mergeArgs = '') {
+  return async (req, res) => {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'Missing "url".' });
 
-  // Build the command to download just the video stream.
-  const command = `${ytDlpPath} --no-check-certificate --cookies "${cookiesPath}" -f "bestvideo[ext=mp4]" -o "${outputFilePath}" "${url}"`;
-  console.log(`Executing /download-video-only command: ${command}`);
+    const outName = `${formatArgs.type}-${Date.now()}.${formatArgs.ext}`;
+    const outputFilePath = path.join(downloadsDir, outName);
 
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error executing yt-dlp (video-only): ${error.message}`);
-      return res.status(500).json({ error: error.message });
-    }
-    console.log(`yt-dlp (video-only) output: ${stdout}`);
-
-    setTimeout(() => {
-      if (!fs.existsSync(outputFilePath)) {
-        console.error('Video-only file not found at:', outputFilePath);
-        return res.status(500).json({ error: 'Downloaded video-only file not found.' });
-      }
-      res.download(outputFilePath, (err) => {
-        if (err) {
-          console.error('Error during video-only file download:', err);
-          return;
-        } else {
-          console.log('Video-only file sent successfully.');
-        }
+    try {
+      // build & run the command with rotating cookies
+      await runWithRotatingCookies(cookiePath => {
+        return `${ytDlpPath} --no-check-certificate ` +
+               `--cookies "${cookiePath}" ` +
+               `${formatArgs.ytDlpArgs} ${mergeArgs} ` +
+               `-o "${outputFilePath}" "${url}"`;
       });
-    }, 5000);
-  });
-});
+
+      // tiny delay to ensure file is flushed
+      setTimeout(() => {
+        if (!fs.existsSync(outputFilePath)) {
+          return res.status(500).json({ error: 'File not found after download.' });
+        }
+        res.download(outputFilePath, err => {
+          if (err) console.error('Download error:', err);
+        });
+      }, 2000);
+
+    } catch (err) {
+      console.error('Download failed:', err);
+      res.status(500).json({ error: err.message });
+    }
+  };
+}
+
+// Wire up your three endpoints
+app.post(
+  '/download',
+  makeDownloadHandler(
+    { type: 'video', ext: 'mp4', ytDlpArgs: '-f "bestvideo+bestaudio/best"' },
+    '--merge-output-format mp4'
+  )
+);
+
+app.post(
+  '/download-audio',
+  makeDownloadHandler(
+    { type: 'audio', ext: 'mp3', ytDlpArgs: '-x --audio-format mp3' }
+  )
+);
+
+app.post(
+  '/download-video-only',
+  makeDownloadHandler(
+    { type: 'video-only', ext: 'mp4', ytDlpArgs: '-f "bestvideo[ext=mp4]"' }
+  )
+);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
